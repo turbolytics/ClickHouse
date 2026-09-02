@@ -915,6 +915,9 @@ TEST_P(CoordinationTest, TestListWithOptionsRequest)
     create("/list_with_options/a/x", "data-x");
     create("/list_with_options/b", "data-b");
     create("/list_with_options/b/x", "data-bx");
+    create("/list_with_options_shuffle");
+    for (const auto * child_name : {"a", "b", "c", "d", "e", "f", "g", "h"})
+        create("/list_with_options_shuffle/" + String(child_name));
 
     {
         const auto & response = list("/list_with_options", {});
@@ -947,6 +950,32 @@ TEST_P(CoordinationTest, TestListWithOptionsRequest)
         ASSERT_EQ(response.names.size(), 1);
         EXPECT_TRUE(response.names[0] == "a" || response.names[0] == "b");
         EXPECT_TRUE(response.truncated);
+    }
+
+    {
+        ListOptions options;
+        options.shuffle = true;
+        const auto make_list_request = [&]
+        {
+            auto request = std::make_shared<ZooKeeperListWithOptionsRequest>();
+            request->path = "/list_with_options_shuffle";
+            request->options = options;
+            return request;
+        };
+        const Requests list_requests {make_list_request(), make_list_request()};
+        const auto request = std::make_shared<ZooKeeperMultiRequest>(list_requests, ACLs{});
+        request->xid = ++zxid;
+
+        KeeperRequestsForSessions requests {KeeperRequestForSession {.session_id = 1, .request = request}};
+        const auto responses = storage.processLocalRequests(requests, /*check_acl=*/true);
+        ASSERT_EQ(responses.size(), 1);
+        const auto & multi_response = dynamic_cast<const ZooKeeperMultiReadResponse &>(*responses[0].response);
+        ASSERT_EQ(multi_response.responses.size(), 2);
+        const auto & first_response = dynamic_cast<const ZooKeeperListWithOptionsResponse &>(*multi_response.responses[0]);
+        const auto & second_response = dynamic_cast<const ZooKeeperListWithOptionsResponse &>(*multi_response.responses[1]);
+        EXPECT_EQ(first_response.error, Error::ZOK);
+        EXPECT_EQ(second_response.error, Error::ZOK);
+        EXPECT_NE(first_response.names, second_response.names);
     }
 
     {
